@@ -22,18 +22,18 @@ Each milestone is logged with date, scope, decisions, and outcomes.
 | 1 | Session Management Layer | ✅ Complete | `app/session/` (5 files) | 166 | 2026-07-02 |
 | 2 | Production Readiness Audit | ✅ Complete | `tests/` (8 files) | — | 2026-07-02 |
 | 3 | Conversation State Machine | ✅ Complete | `app/conversation/` (6 files) | 146 | 2026-07-02 |
-| 4 | Event Bus | 🔲 Planned | `app/events/` | — | — |
+| 4 | Event Bus | ✅ Complete | `app/events/` (10 files) | 30 | 2026-07-02 |
 | 5 | Pipecat Pipeline Integration | 🔲 Planned | `app/pipeline/` | — | — |
 
 ### Current Metrics
 
 | Metric | Value |
 |---|---|
-| Total source files | 11 (`app/session/` 5 + `app/conversation/` 6) |
-| Total statements | 330 |
-| Total tests | 312 (all passing) |
-| Line coverage | 100% |
-| Branch coverage | 100% |
+| Total source files | 21 (`app/session/` 5 + `app/conversation/` 6 + `app/events/` 10) |
+| Total statements | 641 |
+| Total tests | 342 (all passing) |
+| Line coverage | >95% |
+| Branch coverage | >95% |
 | Ruff | ✅ Clean |
 | Mypy (strict) | ✅ Clean |
 
@@ -41,8 +41,10 @@ Each milestone is logged with date, scope, decisions, and outcomes.
 
 | Commit | Message | Files |
 |---|---|---|
-| `0772b50` | feat: conversation state machine | 12 changed, +1,718 |
-| `1a465e5` | feat: session management layer + audit suite | 20 changed, +2,058 |
+| `pending` | feat: event bus implementation | 16 changed |
+| `90f4b6b` | docs: add project progress summary | 1 changed |
+| `0772b50` | feat: conversation state machine | 12 changed |
+| `1a465e5` | feat: session management layer + audit suite | 20 changed |
 | `1900fc7` | first commit | — |
 
 **Branch**: `feature/session-management` → `origin/feature/session-management`
@@ -219,6 +221,58 @@ Any non-terminal state → CLOSED (terminal)
 - `app/session/` was **not modified** — the conversation package is additive.
 - The future **Pipeline Coordinator** will hold both a `SessionManager` and a `Dict[str, ConversationStateMachine]`, synchronising session state with conversation state.
 - The milestone 2 finding ("no state transition validation matrix" in SessionManager) is now **resolved** by this dedicated FSM layer.
+
+---
+
+## Milestone 4 — Event Bus
+
+**Date**: 2026-07-02  
+**Status**: ✅ Complete  
+**Scope**: `app/events/` — Asynchronous publish-subscribe messaging backbone
+
+### What Was Built
+
+| File | Purpose |
+|---|---|
+| `event_types.py` | 20 strongly typed, frozen dataclass events spanning Session, Conversation, Pipeline, Error, and Metrics domains |
+| `subscriber.py` | `Subscriber` model with exact/wildcard pattern matching, priority ordering, and one-shot delivery flags |
+| `registry.py` | Thread-safe / async-safe registry for managing subscriptions |
+| `dispatcher.py` | Strict sequential dispatcher isolating handler failures so one bad subscriber doesn't kill the bus |
+| `middleware.py` | Async chain-of-responsibility middleware pipeline (includes `LoggingMiddleware` and `MetricsMiddleware`) |
+| `publisher.py` | Segregated `Publisher` protocol for components that only emit events |
+| `bus.py` | `EventBus` orchestrating the above, handling sync-to-async boundary crossing via a background worker task |
+| `exceptions.py` | `EventBusError` hierarchy |
+
+### Key Design Decisions
+
+1. **Framework-agnostic handlers** — Handlers are plain async callables `async def fn(event: Event) -> None`. No base classes or decorators required, drastically lowering the barrier to entry.
+2. **Interface Segregation** — Exposing a pure `Publisher` protocol so downstream components don't need to know about the `EventBus` internals or subscriber registry.
+3. **Async / Sync bridging** — The `EventBus` manages a background `asyncio.Task` queue, exposing `publish_sync(event)` for blocking endpoints (like FastAPI sync routes) to fire-and-forget events into the async ecosystem.
+4. **Resilient Dispatch** — If 5 subscribers match an event and the 2nd one raises an exception, the dispatcher catches it, logs it, executes the remaining 3, and only *then* raises a `HandlerExecutionError` wrapping the first failure.
+5. **Wildcard Routing** — Subscribers can listen to `"Pipeline*"` or `"ConversationStarted"` using standard glob matching.
+
+### Architecture Flow
+
+```text
+Publisher (STT / API / Pipeline)
+  ↓ publish(event)
+EventBus (Middleware Chain)
+  ↓ routes via Registry
+Dispatcher
+  ↓ executes in priority order
+Subscribers (1..N async callables)
+```
+
+### Test Suite
+
+| File | Tests | Category |
+|---|---|---|
+| `test_event_registry.py` | 9 | Registration, unregistration, wildcard matching, priority sorting, one-shot cleanup |
+| `test_event_dispatcher.py` | 5 | Success, one-shot IDs, sync fallback, error isolation |
+| `test_event_middleware.py` | 4 | Logging, metrics success/failure, chain short-circuiting |
+| `test_event_bus.py` | 5 | No-subscribers, batch publishing, sync background worker, middleware execution/errors |
+| `test_event_concurrency.py` | 3 | 100 concurrent subs, 100 concurrent publishers, high-volume fire-and-forget sync |
+| `test_event_performance.py` | 3 | 1000 events throughput, 1x100 fanout latency, stable memory profile over 5K cycles |
 
 ---
 
