@@ -1676,3 +1676,32 @@ Performed a comprehensive repository cleanup to enforce production-readiness, si
 - ✅ No tests changed.
 - ✅ No functionality changed.
 - ✅ All essential configurations, workflows, and core architecture logic have been fully preserved.
+
+---
+
+## Milestone 21 — Returning Caller Persistence Validation
+**Date**: 2026-07-12
+**Status**: ✅ Complete
+
+### Test Purpose
+Validate that a returning caller is correctly identified using the stored phone number and that the existing client record is reused instead of creating a duplicate row in the Neon PostgreSQL database.
+
+### Database Verification
+- Queried the `clients` table after simulating two incoming calls from `+919999999999`.
+- Verified exactly 1 row exists for that phone number.
+- Verified that the UNIQUE constraint on `phone_number` is respected.
+
+### Repository Verification
+- Verified `ClientRepository.get_or_create_client()` correctly retrieves an existing client when a match is found.
+- Verified that no raw SQL was executed outside of the repository methods (excluding test assertions).
+- Verified that asynchronous execution was preserved via SQLAlchemy 2.0.
+
+### Results
+- ✅ First call created one client.
+- ✅ Second call returned the exact same client record.
+- ✅ UUID remained identical between the two calls.
+- ✅ No duplicate client rows exist in the Neon PostgreSQL database.
+
+### Lessons Learned
+- The `get_or_create_client` pattern works efficiently and prevents duplicates when correctly combined with database unique constraints and indexed lookups.
+- Utilizing `AsyncSession` context managers ensures clean database connections and transaction management even in testing scenarios.
