@@ -101,10 +101,10 @@ def _build_real_pipeline_task(
         from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import SpeechTimeoutUserTurnStopStrategy
         from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
 
-        session_id = bridge.session_id
+        session_id = bridge._session_id
         from app.session.manager import SessionManager
         sm = SessionManager()
-        sess = sm.get_session(session_id)
+        sess = sm._sessions.get(session_id)
         prev_summary = sess.metadata.get("previous_summary", "") if sess else ""
         
         system_content = VOICE_SYSTEM_PROMPT + "\n\n" + get_faq_context_block()
@@ -301,7 +301,7 @@ class PipecatAdapter:
                 )
 
                 # Delay greeting to allow Twilio audio to fully connect
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(0.5)
                 await self.task.queue_frames([
                     LLMMessagesAppendFrame(
                         messages=[{
