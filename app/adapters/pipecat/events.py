@@ -81,6 +81,11 @@ class PipecatEventBridge:
         try:
             from app.conversation.transitions import ConversationState
             target = ConversationState[target_state_name]
+            
+            # Prevent redundant transitions to avoid spammy logs
+            if self._fsm.get_current_state() == target:
+                return
+                
             self._fsm.transition_to(target, reason=reason)  # type: ignore[union-attr]
         except Exception as exc:
             logger.bind(session_id=self._session_id).warning(
