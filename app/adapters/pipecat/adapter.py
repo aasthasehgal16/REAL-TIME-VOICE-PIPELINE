@@ -94,7 +94,18 @@ def _build_real_pipeline_task(
     prompt = VOICE_SYSTEM_PROMPT
     if company_context:
         prompt += f"\n\nCompany Context:\n{company_context}"
-    context = LLMContext([{"role": "system", "content": prompt}])
+    async def end_call(params):
+        """End the conversation when the user naturally says goodbye or indicates they are done. ALWAYS say a natural farewell to the user FIRST before calling this function."""
+        logger.info("LLM triggered end_call function! Queueing EndFrame to terminate call.")
+        if params.result_callback:
+            await params.result_callback({"status": "ending_call"})
+        from pipecat.frames.frames import EndFrame
+        await task.queue_frames([EndFrame()])
+        
+    context = LLMContext(
+        messages=[{"role": "system", "content": prompt}],
+        tools=[end_call]
+    )
 
     # 2. Extract real transport
     real_transport = transport.get_pipecat_transport() if transport else None
@@ -166,16 +177,16 @@ def _build_real_pipeline_task(
     from pipecat.turns.user_turn_strategies import UserTurnStrategies
     from pipecat.turns.user_stop.speech_timeout_user_turn_stop_strategy import SpeechTimeoutUserTurnStopStrategy
     from pipecat.processors.aggregators.llm_response_universal import LLMUserAggregatorParams
-    from pipecat.turns.user_mute.mute_until_first_bot_complete_user_mute_strategy import MuteUntilFirstBotCompleteUserMuteStrategy
+    from pipecat.turns.user_mute.first_speech_user_mute_strategy import FirstSpeechUserMuteStrategy
     import os
 
     mute_strategies = []
     if os.getenv("ENABLE_INITIAL_GREETING", "True").lower() == "true":
-        mute_strategies.append(MuteUntilFirstBotCompleteUserMuteStrategy())
+        mute_strategies.append(FirstSpeechUserMuteStrategy())
         
     agg_params = LLMUserAggregatorParams(
         user_turn_strategies=UserTurnStrategies(
-            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.6)]
+            stop=[SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=0.8)]
         ),
         user_mute_strategies=mute_strategies
     )
@@ -191,12 +202,18 @@ def _build_real_pipeline_task(
     # In Pipecat 1.5.0, VAD is a separate processor that must be injected manually
     from pipecat.processors.audio.vad_processor import VADProcessor
     from pipecat.audio.vad.silero import SileroVADAnalyzer
+    from pipecat.audio.vad.vad_analyzer import VADParams
 
     # Canonical Pipecat voice pipeline order:
     #   transport.input → VADProcessor → STT → user_aggregator → LLM → TTS → transport.output → assistant_aggregator
     pipeline_elements = [
         real_transport.input(),
-        VADProcessor(vad_analyzer=SileroVADAnalyzer()),
+        VADProcessor(vad_analyzer=SileroVADAnalyzer(params=VADParams(
+            confidence=0.75,
+            start_secs=0.5,
+            stop_secs=0.8,
+            min_volume=0.3
+        ))),
         stt,
         user_aggregator,
         llm,
@@ -217,6 +234,12 @@ def _build_real_pipeline_task(
         ),
         observers=[EventBridgeObserver()],
     )
+
+    # Attach the LLMContext to the task so the adapter can access it later for greetings
+    task._llm_context = context
+    
+    if llm and hasattr(llm, "register_function"):
+        llm.register_function("end_call", end_call)
 
     return task
 
@@ -342,44 +365,24 @@ class PipecatAdapter:
 
             @pipecat_transport.event_handler("on_client_connected")
             async def on_client_connected(transport, websocket):
-                logger.bind(session_id=self.session_id).info(
-                    "Transport: client connected — launching greeting task"
-                )
+                logger.bind(session_id=self.session_id).info("Transport: client connected — triggering LLM dynamic greeting")
                 if not enable_greeting:
                     return
 
-                async def _send_greeting():
-                    try:
-                        logger.bind(session_id=self.session_id).info(
-                            "Greeting task: sleeping 1.5s for pipeline to be fully ready..."
-                        )
-                        await asyncio.sleep(1.5)
+                async def _trigger_greeting():
+                    # Wait for transport media streams to fully establish before speaking
+                    await asyncio.sleep(1.5)
+                    # Send the context to the LLM so it generates the first greeting dynamically based on the system prompt
+                    from pipecat.frames.frames import LLMRunFrame
+                    
+                    # Llama-3 models often refuse to generate output if the context ONLY has a system prompt.
+                    # We inject a silent user trigger message to force it to execute the greeting instruction.
+                    self.task._llm_context.add_message({"role": "user", "content": "User has connected. Please introduce yourself."})
+                    
+                    self.event_bus.publish_sync(AssistantGreetingStarted(session_id=self.session_id))
+                    await task_ref.queue_frames([LLMRunFrame()])
 
-                        logger.bind(session_id=self.session_id).info(
-                            "Greeting task: queuing TTSSpeakFrame"
-                        )
-                        self.event_bus.publish_sync(
-                            AssistantGreetingStarted(session_id=self.session_id)
-                        )
-                        await task_ref.queue_frames([
-                            TTSSpeakFrame(
-                                text=(
-                                    "Hello! I'm Sarah from Cybernauts Noida. How can I assist you today? "
-                                    "नमस्ते! मैं साइबरनॉट्स नोएडा से सारा बोल रही हूँ। मैं आज आपकी किस प्रकार सहायता कर सकती हूँ?"
-                                ),
-                                append_to_context=True,
-                            )
-                        ])
-                        logger.bind(session_id=self.session_id).info(
-                            "Greeting task: TTSSpeakFrame queued successfully ✓"
-                        )
-                    except Exception as greet_err:
-                        logger.bind(session_id=self.session_id).exception(
-                            "Greeting task failed: {e}", e=greet_err
-                        )
-
-                # Fire and forget — do not block the transport event callback
-                asyncio.create_task(_send_greeting())
+                asyncio.create_task(_trigger_greeting())
 
             runner = PipelineRunner()
             logger.bind(session_id=self.session_id).info(

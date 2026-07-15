@@ -47,6 +47,8 @@ class TwilioTransportAdapter(PipecatTransportAdapter):
             ),
         )
 
+        audio_in_filter = None
+
         self.transport = FastAPIWebsocketTransport(
             websocket=websocket,
             params=FastAPIWebsocketParams(
@@ -55,8 +57,10 @@ class TwilioTransportAdapter(PipecatTransportAdapter):
                 audio_in_sample_rate=8000,
                 audio_out_sample_rate=8000,
                 add_wav_header=False,
-                vad_enabled=False,       # Disabled to prevent pipecat from calling finalize() on Deepgram
-                vad_analyzer=_build_vad_analyzer(),
+                audio_in_filter=audio_in_filter,
+                # Note: vad_enabled/vad_analyzer are NOT valid on FastAPIWebsocketParams in
+                # Pipecat 1.5.0. Deepgram handles its own endpointing via endpointing="300",
+                # so no transport-level VAD is needed for Twilio.
                 serializer=serializer,
             ),
         )
@@ -69,6 +73,9 @@ class LiveKitTransportAdapter(PipecatTransportAdapter):
     """Implementation for LiveKit WebRTC."""
 
     def __init__(self, room_url: str, bot_name: str):
+        if not room_url:
+            raise ValueError("LIVEKIT_URL is not set")
+            
         from livekit import api
         from app.config import LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_ROOM
         
@@ -82,6 +89,8 @@ class LiveKitTransportAdapter(PipecatTransportAdapter):
         )
 
         from pipecat.transports.livekit.transport import LiveKitParams, LiveKitTransport
+        
+        audio_in_filter = None
 
         self.transport = LiveKitTransport(
             url=room_url,
@@ -92,6 +101,7 @@ class LiveKitTransportAdapter(PipecatTransportAdapter):
                 audio_out_enabled=True,
                 vad_enabled=False,       # Disabled to prevent pipecat from calling finalize() on Deepgram
                 vad_analyzer=_build_vad_analyzer(),
+                audio_in_filter=audio_in_filter,
                 # Bot's own TTS output can be interrupted the instant user audio crosses the VAD threshold above.
                 audio_out_is_live=True,
             ),

@@ -156,7 +156,6 @@ async def run_voice_session(transport=None, phone_number: str = "unknown_client"
     event_bus = EventBus()
     
     # Subscribe to SessionClosed for DB Persistence
-    @event_bus.subscribe(SessionClosed)
     async def on_session_closed(event: SessionClosed) -> None:
         async with db_manager.get_session() as db_session:
             sess_data = session_manager.get_session(event.session_id)
@@ -177,6 +176,7 @@ async def run_voice_session(transport=None, phone_number: str = "unknown_client"
                 await SessionRepository.close_session(db_session, event.session_id, int(sess_data.duration_seconds))
                 logger.info("Persisted call summary and closed DB session for {sid}", sid=event.session_id)
                 
+    await event_bus.subscribe(SessionClosed.__name__, on_session_closed)
     await event_bus.start()
     event_bus.publish_sync(SessionCreated(session_id=session_id))
     logger.info("EventBus started")
