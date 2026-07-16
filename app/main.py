@@ -323,6 +323,8 @@ async def run_voice_session(
 
         await session_manager.set_state(session_id, SessionState.CLOSED)
         event_bus.publish_sync(SessionClosed(session_id=session_id))
+        await event_bus._queue.join()  # Wait for SessionClosed to be processed (persists summary) before stopping
+
 
         await event_bus.stop()
         logger.info("Session closed | session_id={sid}", sid=session_id)
