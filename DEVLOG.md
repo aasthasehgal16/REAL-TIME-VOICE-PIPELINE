@@ -678,6 +678,35 @@ Validate that a returning caller is correctly identified using the stored phone 
 - Utilizing `AsyncSession` context managers ensures clean database connections and transaction management even in testing scenarios.
 
 ---
+
+
+## LLM Prompts & Lead Capture Refinement
+**Date**: 2026-07-17
+**Status**: ✅ Complete
+
+### Overview
+Updated the conversational AI prompts, FAQ, and knowledge base to improve the lead capture workflow. Refined the save_lead tool description to prevent premature triggering and enforce capturing the user's real name and phone number instead of directing them to WhatsApp or Email.
+
+### Actions Taken
+- **System Prompts Updated**: Modified pp/llm/prompts.py to instruct the AI to actively ask for the user's Name and Phone number and trigger the save_lead tool immediately after receiving them.
+- **FAQ & Knowledge Base Overhaul**: Updated pp/llm/company_faq.py and pp/llm/knowledge_base.json to stop providing email or WhatsApp numbers. Instead, the AI is now strictly instructed to ask for contact details and arrange a callback.
+- **Tool Instruction Refined**: Improved the docstring and instructions for the save_lead tool in pp/services/lead_manager.py so it only triggers when actual names and phone numbers are provided, preventing dummy values.
+
+---
+
+## Multi-Language Support & Latency Optimizations
+**Date**: 2026-07-17
+**Status**: ✅ Complete
+
+### Overview
+Added robust multi-language capabilities ensuring seamless conversational interaction across English, Hindi, and Hinglish. In tandem, the end-to-end latency across STT, LLM generation, and TTS pipelines has been optimized to drastically reduce Time-to-First-Byte (TTFB) for voice responses.
+
+### Actions Taken
+- **Dynamic Language Detection**: Integrated language routing to intelligently detect user languages and adapt the pipeline accordingly.
+- **System Prompt Refinement**: Instructed the LLM to automatically mirror the user's language (Hindi, English, or mixed Hinglish) and handle seamless language switching mid-conversation without breaking context.
+- **Latency Benchmarking & Fine-Tuning**: Benchmarked and optimized Pipecat context aggregation, Deepgram STT chunking, and ElevenLabs TTS audio synthesis intervals, resulting in a faster, near-human response time.
+
+
 ## Milestone — Pillar 3: Fixed Conversation History Tracking for Summary Generation
 **Date**: 2026-07-17
 **Status**: ✅ Complete — Implemented and Tested
@@ -710,3 +739,5 @@ Conversation summaries generated at call-end were always generic ("no conversati
 ### Lessons Learned
 - Instantiating a manager/service class fresh in multiple places (instead of passing a shared instance) silently breaks state continuity when the backing store is in-memory — this is easy to miss because no exception is raised, the code just quietly operates on an empty store.
 - Cancelling a background worker right after publishing to its queue is a classic race condition — always drain or await pending work before teardown.
+
+

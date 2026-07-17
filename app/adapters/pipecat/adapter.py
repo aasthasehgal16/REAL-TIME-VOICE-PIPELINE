@@ -117,11 +117,15 @@ def _build_real_pipeline_task(
             from pipecat.frames.frames import EndFrame
             await task.queue_frames([EndFrame()])
 
+        from app.services.lead_manager import save_lead
+        
+        tools = [save_lead]
+
         context = LLMContext(
               messages=[
                  {"role": "system", "content": system_content}
                ],
-              tools=[end_call]
+              tools=tools
             )
         
         # Optimize Turn Stop Strategy for extreme low latency (bypasses LLM completeness checks)
@@ -141,18 +145,25 @@ def _build_real_pipeline_task(
         user_agg = LLMUserAggregator(context, params=agg_params)
         asst_agg = LLMAssistantAggregator(context)
         
-        # Build the exact Pipecat sequence: [stt, user_agg, llm, tts, asst_agg]
+        # Build the exact Pipecat sequence: [stt, language_router, user_agg, llm, tts, call_terminator, asst_agg]
         new_processors = []
+        shared_state = {}
+        from app.adapters.pipecat.language_router import LanguageRoutingProcessor, CallTerminationProcessor
+        from app.adapters.pipecat.filler_processor import LatencyFillerProcessor
+        
+        # Add filler processor with hmm.wav
+        filler_wav = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "hmm.wav"))
+        filler_processor = LatencyFillerProcessor(filler_wav_path=filler_wav, delay_threshold_ms=300)
+        
         for p in pipecat_processors:
             if isinstance(p, GroqLLMService):
-                from app.adapters.pipecat.language_router import LanguageRoutingProcessor, CallTerminationProcessor
-                shared_state = {}
                 new_processors.append(LanguageRoutingProcessor(shared_state=shared_state))
                 new_processors.append(user_agg)
+                new_processors.append(filler_processor)
                 new_processors.append(p)
-                new_processors.append(CallTerminationProcessor(shared_state=shared_state))
             elif p.__class__.__name__.endswith("TTSService"):
                 new_processors.append(p)
+                new_processors.append(CallTerminationProcessor(shared_state=shared_state))
                 new_processors.append(asst_agg)
             else:
                 new_processors.append(p)
@@ -221,9 +232,6 @@ def _build_real_pipeline_task(
     # Attach the LLMContext to the task so the adapter can access it later for greetings
     task._llm_context = context
     
-    if llm and hasattr(llm, "register_function"):
-        llm.register_function("end_call", end_call)
-
     return task
 
 
@@ -266,7 +274,7 @@ class PipecatAdapter:
             # 1. Map internal DAG processors (transport roles excluded — handled separately)
             processor_adapters = PipecatPipelineMapper.map_pipeline(self.pipeline)
             # Filter out placeholder transport processors — the real ones come from the injected transport
-            pipecat_processors = [
+            self.pipecat_processors = [
                 p.get_processor()
                 for p in processor_adapters
                 if not getattr(p.get_processor(), "name", "").startswith("Transport_")
@@ -276,11 +284,11 @@ class PipecatAdapter:
             try:
                 if self.transport and "Mock" in type(self.transport).__name__:
                     raise ImportError("Force mock fallback for tests")
-                if any("Mock" in type(p).__name__ for p in pipecat_processors):
+                if any("Mock" in type(p).__name__ for p in self.pipecat_processors):
                     raise ImportError("Force mock fallback for tests because mock processors exist")
                 self.task = _build_real_pipeline_task(
-                pipecat_processors, self.transport, self.bridge, self.session_manager
-)
+                    self.pipecat_processors, self.transport, self.bridge, self.session_manager
+                )
                 logger.bind(session_id=self.session_id).info(
                     "Real pipecat PipelineTask created"
                 )
@@ -291,9 +299,9 @@ class PipecatAdapter:
                 )
                 if self.transport:
                     real_t = self.transport.get_pipecat_transport()
-                    pipecat_processors.insert(0, real_t)
+                    self.pipecat_processors.insert(0, real_t)
                 self.task = MockPipecatPipelineTask(
-                    processors=pipecat_processors,
+                    processors=self.pipecat_processors,
                     event_handler=self.bridge,
                 )
 
