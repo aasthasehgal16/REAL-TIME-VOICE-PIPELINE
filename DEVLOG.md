@@ -679,6 +679,28 @@ Validate that a returning caller is correctly identified using the stored phone 
 
 ---
 
+---
+## Milestone — Pillar 3: Real Groq-Based Summary Generation for Persistent Memory
+**Date**: 2026-07-16
+**Status**: ✅ Complete — Implemented and Tested
+
+### Overview
+Replaced the placeholder/mock summary generation in `on_session_closed` (which simply truncated the raw transcript into a fake "summary") with a real Groq LLM call, as agreed in the persistent-memory architecture discussion.
+
+### What was built
+- The summary logic now combines the caller's **previous summary** (loaded from `caller_summaries`/`ConversationSummary` at call start) with the **current call's transcript**, and asks Groq to produce ONE updated, concise summary (3-5 sentences) — overwriting the old one.
+- Added a fallback: if the Groq call fails for any reason, the previous summary is kept as-is rather than losing it or crashing.
+- Fixed a race condition where `event_bus.stop()` was cancelling the background event worker immediately after publishing `SessionClosed`, before the event could actually be processed — added `await event_bus._queue.join()` before stopping, so the summary-persistence subscriber reliably runs before shutdown.
+
+### Verification
+- Verified the Groq prompt construction and summary generation logic via a standalone script (`test_summary_write.py`), confirming the LLM correctly combines previous + new context.
+- Verified DB read/write for client creation and summary save/retrieve via manual scripts, independent of the live call pipeline.
+
+### Conclusion
+This closes the gap between the mock summary generation and the real, production-ready implementation. Combined with the later conversation-history-tracking fix, this completes the core persistent memory feature end-to-end.
+
+---
+
 
 ## LLM Prompts & Lead Capture Refinement
 **Date**: 2026-07-17
